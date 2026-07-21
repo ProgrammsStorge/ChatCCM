@@ -1,21 +1,20 @@
 import json
 import random
-import re
-import threading
 import time
 import traceback
 from collections import defaultdict
-
 import zstandard as zstd
 from jinja2 import Template
 from pathlib import Path
 
 class CCM():
-    def __init__(self,dataset=None,file=None,format="",zip=True,add_prefix=True,gram_count=5,repeat=False,save=True,to_set=True):
+    def __init__(self,dataset=None,file=None,format="",zip=True,add_prefix=True,gram_count=5,repeat=False,save=True,to_set=True,hipo_model={}, hipo=[],hipo_multiple=1):
 
         self.repeat=repeat
         cctx = zstd.ZstdCompressor(level=22)
         dctx = zstd.ZstdDecompressor()
+        self.hipo=hipo
+        self.hipo_multiple=hipo_multiple
         if dataset!=None:
             self.dataset=dataset
             self.wordset={}
@@ -47,15 +46,26 @@ class CCM():
 
         else:
             with open(file,"rb") as f:
-                readed = json.loads(dctx.decompress(f.read()).decode('utf-8'))
+                if file.lower().endswith('.cws'):
+                    readed = json.loads(dctx.decompress(f.read()).decode('utf-8'))
+                else:
+                    readed =json.loads(f.read())
                 self.model_name = Path(file).stem
                 self.wordset = readed["wordset"]
                 self.to_set=to_set
+                self.gram_count = readed["gram_count"]
+                self.format = readed["format"]
+                if readed.get("hipo"):
+                    self.hipo =  set([frozenset(context) for context in readed["hipo"]])
+                if readed.get("hipo_model"):
+                    self.hipo_model=readed["hipo_model"]
+                if readed.get("hipo_multiple"):
+                    self.hipo_multiple = readed["hipo_multiple"]
+                if hipo_model!={} and True:
+                    self.wordset = self.merge_dicts(self.wordset,self.hipo_model)
                 if to_set:
                     for word in self.wordset:
                         self.wordset[word] = [set(context) for context in self.wordset[word]]
-                self.gram_count = readed["gram_count"]
-                self.format = readed["format"]
 
     def chat(self,messages,max_tokens=250,end_tokens=[],ignore_tokens=[],load_function=None,print_debug=False,temperature=0,more_info=False):
         s_time = time.time()
@@ -77,20 +87,10 @@ class CCM():
         return dict(result)
 
     def generate(self,text_user,max_tokens=250,end_tokens=[],ignore_tokens=[],load_function=None,print_debug=False,temperature=0):
-        #good_words = self.extract_keywords(text_user.lower())
         text=text_user
-        #text = "user: " + text_user.lower() + ' \nassistant:'
-        #edited_dataset=[]
         if load_function!=None:
             inter_result = load_function(text_user)
             self.wordset = self.merge_dicts(self.wordset, self.indexing(inter_result,train=False))
-        #print("Интернет использован")
-
-
-        #edited_dataset=edited_dataset[::-1]
-           #print("\n---\n".join(edited_dataset))
-        #edited_words = sorted(list(set("\n---\n".join(edited_dataset).lower().replace("#","").split())) + ["\n"])
-
 
         new_text=""
         for i in range(max_tokens):
@@ -106,20 +106,15 @@ class CCM():
                 for num_word,word in enumerate(self.wordset):
                     for data in self.wordset[word]:
                             try:
-                                #score = len(q_trigrams & data)
-                                if not self.to_set:
-                                    union_len = len(q_trigrams | set(data))
 
-                                    if union_len == 0:
-                                        score = 0.0
-                                    else:
-                                        score = len(q_trigrams & set(data)) / union_len
-                                else:
-                                    intersection = len(q_trigrams & data)
-                                    union_len = len_q + len(data) - intersection
-                                    score = intersection / union_len if union_len else 0.0
+                                intersection = len(q_trigrams & data)
+                                union_len = len_q + len(data) - intersection
+                                score = intersection / union_len if union_len else 0.0
+
+                                if data in self.hipo:
+                                   score*=self.hipo_multiple
                                 res = [[text, score]]
-                                if temperature!=0: res[0][1] *= (random.randint(-temperature, temperature)/100)+1
+                                if temperature!=0: res[0][1] *= (random.uniform(-temperature, temperature))+1
                                 if word in ignore_tokens:
                                     res[0][1] -= 0.2
                                 if word_win[1] < res[0][1]:
@@ -141,10 +136,7 @@ class CCM():
                 text += f" {word_win[0]}"
                 new_text += f" {word_win[0]}"
                 if print_debug: print(" score: "+str(word_win[1]), end="")
-                if print_debug: print(new_text, end=" ")# + str(last_winers)
-
-                #print(word_win[0], end=" ")
-
+                if print_debug: print(new_text, end=" ")
             else:
                 if print_debug: print()
                 return new_text.strip()
@@ -175,22 +167,3 @@ class CCM():
             return sum(len(group) for contexts in self.wordset.values() for group in contexts)
         else:
             return words_in_dataset
-
-# if __name__ == "__main__":
-#     with open("input.txt", "r",encoding="utf-8") as f:
-#         readed=f.read().replace("<"," <").replace(">","> ").replace('"',"").replace(":",": ")[0:].lower().replace("пользователь:","user:").replace("бот:","assistant:").replace("---  ","---")
-#         print(len(readed))
-#         #database = list(set(['\n'.join(readed.split("\n")[i:i + 2]) for i in range(0, len(readed.split("\n")), 2)]))
-#         database =list(set(readed.lower().split("\n---\n")))
-#
-#         #database += ["\n".join(i.split("\n")[::-1])for i in database]
-#         words = sorted(list(set(readed.lower().split()))+["\n"])
-#
-#     print(database)
-#     print(words)
-#
-#     while True:
-#         text = ""
-#         text += generate(text+input("\n>> "))
-#         print(text)
-#
